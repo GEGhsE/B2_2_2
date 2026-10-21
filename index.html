@@ -130,6 +130,13 @@ body{background:linear-gradient(180deg,#FFF8DD,#FFE9A8);color:#333}
 .record-btn-huge.recording .dot-big{width:50px;height:50px;border-radius:10px}
 .stt-display{background:#fff;border-radius:18px;padding:14px 24px;border:3px solid #E5E7EB;max-width:780px;width:90%;box-shadow:var(--card-shadow);min-height:80px}
 .stt-label{font-family:var(--font-display);font-size:20px;color:#666;margin-bottom:6px}
+.type-box{width:90%;max-width:780px;display:flex;flex-direction:column;gap:6px}
+.type-box label{font-family:var(--font-display);font-size:20px;color:#6B4A00}
+.type-box textarea{width:100%;font-family:var(--font-body);font-weight:700;font-size:24px;line-height:1.45;padding:12px 16px;border:3px solid #FFC23C;border-radius:16px;background:#fff;color:#222;resize:none;outline:none;user-select:text}
+.type-box textarea:focus{border-color:#E8A800;box-shadow:0 0 0 4px rgba(255,194,60,.3)}
+.post-followup-mode .type-box,.post-followup-mode .type-open{display:none !important}
+.type-open{font-family:var(--font-display);font-size:20px;color:#6B4A00;background:#fff;border:3px dashed #FFC23C;border-radius:999px;padding:8px 22px;cursor:pointer}
+.record-wrap.typing .mascot-corner,.record-wrap.typing > .speech{display:none}
 .stt-text{font-family:var(--font-body);font-size:26px;color:#222;line-height:1.5;min-height:32px}
 .record-bottom{display:flex;gap:14px;margin-top:auto;align-items:center}
 
@@ -900,8 +907,9 @@ function updateProgress(){
   document.getElementById('progress-label').textContent=APP_STATE.currentScreen==='activity'?`${d} / ${t}`:(['inquiry-post','post-record','cert'].includes(APP_STATE.currentScreen)?'완료':'준비');
 }
 function goHome(){
-  if(!confirm('처음 화면으로 돌아갈까요?'))return;
-  clearProgress();
+  const _canResume=!GAS_URL&&APP_STATE.learnerName&&APP_STATE.currentScreen==='activity';
+  if(!confirm(_canResume?'처음 화면으로 돌아갈까요?\n지금까지 푼 곳은 이름을 고르면 이어서 할 수 있어요.':'처음 화면으로 돌아갈까요?'))return;
+  if(APP_STATE.currentScreen==='activity')saveProgress();
   stopSpeech();
   SCREEN_HISTORY.length=0;
   Object.assign(APP_STATE,{learnerName:'',learnerClass:'',correct:0,total:0,activityIdx:0,activityQueue:[],
@@ -925,7 +933,7 @@ function renderMicGate(root){
       </div>
       <button class="big-btn green" onclick="micProceed(true)">🎤 마이크 허용하기</button>
       <div class="tutorial-hint">💡 위 버튼을 누르면 마이크 허가 창이 떠요</div>
-      <button class="skip-btn" onclick="micProceed(false)">마이크 없이 시작 (글로 써서 활동)</button>
+      <button class="skip-btn" onclick="micProceed(false)">마이크 없이 시작 (키보드로 써서 활동)</button>
       <div class="mascot-corner"><div class="mascot-with-cap">${svgMoEum(130)}<svg class="grad-cap-svg" viewBox="-40 -22 80 30"><polygon points="-32,-2 32,-2 28,-10 -28,-10" fill="#2A2A4A" stroke="#1A1A30" stroke-width="1"/><rect x="-34" y="-2" width="68" height="5" fill="#2A2A4A" rx="1"/><line x1="18" y1="-4" x2="34" y2="-18" stroke="#FFD700" stroke-width="2.5" stroke-linecap="round"/><circle cx="34" cy="-18" r="5" fill="#FFD700" stroke="#D4A800" stroke-width="1.5"/></svg></div></div>
       <div class="mascot-corner right"><div class="mascot-with-cap">${svgNaNum(130)}<svg class="ribbon-svg" viewBox="-30 -8 60 16"><path d="M -22 0 Q -10 -7 0 0 Q 10 -7 22 0 Q 10 7 0 0 Q -10 7 -22 0 Z" fill="#FF6FA8" stroke="#C73874" stroke-width="1.5"/><circle cx="0" cy="0" r="3" fill="#FFD700"/></svg></div></div>
       <div class="speech">잠깐만, 같이 시작하자!</div>
@@ -962,7 +970,7 @@ function renderSetup(root){
           <div class="choice-row" id="count-row">
             <button data-c="10">10문제<br><span style="font-size:.65em;opacity:.8;font-weight:normal">짧게</span></button>
             <button data-c="15" class="selected">15문제<br><span style="font-size:.65em;opacity:.8;font-weight:normal">보통</span></button>
-            <button data-c="24">24문제<br><span style="font-size:.65em;opacity:.8;font-weight:normal">전체</span></button>
+            <button data-c="${APP_STATE.questions.length||24}">${APP_STATE.questions.length||24}문제<br><span style="font-size:.65em;opacity:.8;font-weight:normal">전체</span></button>
           </div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:center;gap:6px;margin-top:24px">
@@ -995,23 +1003,39 @@ function finishSetup(){
 }
 
 function prepareActivityQueue(){
-  // 데이터에 정의된 학습 순서 그대로 — find-pair → 핵심 활동 → 분지/선잇기 → 차근차근 도전
+  // 데이터에 정의된 학습 순서는 그대로 지키면서, 문항 수를 줄여도
+  // 모으기·가르기·마무리(선잇기·식 고르기) 활동이 고르게 섞이도록 뽑는다.
   // 차근차근 도전(speed-round)은 마지막에 *반드시* 보장. 데이터에 없어도 자동 생성.
   const all = APP_STATE.questions;
   const want = APP_STATE.chosenCount || all.length;
-  // speed-round 추출 또는 자동 생성
   const speedIdx = all.findIndex(q => q.stage === 'speed-round');
   const speedQ = (speedIdx >= 0)
     ? all[speedIdx]
     : { id:'SPEED', stage:'speed-round', a:0, b:0, target:0, meta:'', kind:'' };
-  // speed-round 제외한 나머지 활동
   const others = all.filter(q => q.stage !== 'speed-round');
   if (want >= others.length + 1) {
-    // 전체 — 모든 활동 + 마지막 speed
     APP_STATE.activityQueue = others.concat([speedQ]);
   } else if (want >= 2) {
-    // 일부 — 앞에서 want-1개 + speed
-    APP_STATE.activityQueue = others.slice(0, want-1).concat([speedQ]);
+    // 갈래별 바구니: 모으기 / 가르기 / 그 밖
+    const bucketOf = q => /^gather/.test(q.stage) ? 0 : /^split/.test(q.stage) ? 1 : 2;
+    const buckets = [[],[],[]];
+    others.forEach(q => buckets[bucketOf(q)].push(q));
+    // 바구니 안에서는 단계마다 첫 문제부터 돌아가며 (같은 단계만 몰리지 않게)
+    const spread = list => {
+      const byStage = {}; const order = [];
+      list.forEach(q => { if(!byStage[q.stage]){byStage[q.stage]=[];order.push(q.stage);} byStage[q.stage].push(q); });
+      const out = []; let r = 0, added = true;
+      while (added) { added = false; order.forEach(st => { if (byStage[st][r]) { out.push(byStage[st][r]); added = true; } }); r++; }
+      return out;
+    };
+    const lists = buckets.map(spread);
+    const pick = []; const ptr = [0,0,0]; let b = 0, guard = 0;
+    while (pick.length < want-1 && guard < others.length*3) {
+      if (ptr[b] < lists[b].length) pick.push(lists[b][ptr[b]++]);
+      b = (b+1) % 3; guard++;
+    }
+    pick.sort((x,y) => others.indexOf(x) - others.indexOf(y));
+    APP_STATE.activityQueue = pick.concat([speedQ]);
   } else {
     APP_STATE.activityQueue = [speedQ];
   }
@@ -1129,9 +1153,14 @@ function renderRecord(root,phase){
         <button class="record-btn-huge" id="rec-btn" onclick="toggleRecord('${phase}')"><div class="dot-big"></div></button>
         <div class="tutorial-hint" id="rec-tutorial">👆 빨간 동그라미를 눌러 말해 봐요</div>
       </div>
-      <div class="stt-display" id="stt-display" ${rec.text?'':'style="visibility:hidden"'}>
+      <div class="stt-display" id="stt-display" ${rec.text&&APP_STATE.micPermitted?'':'style="display:none"'}>
         <div class="stt-label">📝 내가 한 말</div>
         <div class="stt-text" id="stt-text">${rec.text||''}</div>
+      </div>
+      <button type="button" class="type-open" id="type-open" ${APP_STATE.micPermitted&&!(rec.text&&!rec.audioBase64)?'':'style="display:none"'}>⌨️ 말 대신 글로 쓸래요</button>
+      <div class="type-box" id="type-box" ${APP_STATE.micPermitted&&!(rec.text&&!rec.audioBase64)?'style="display:none"':''}>
+        <label for="rec-typed">⌨️ 말 대신 글로 써도 돼요</label>
+        <textarea id="rec-typed" maxlength="300" rows="2" placeholder="${isPre?'예) 두 수를 합치는 거예요':'예) 7은 3과 4로 가를 수 있어요'}">${rec.audioBase64?'':(rec.text||'')}</textarea>
       </div>
       <div class="record-bottom" id="rec-bottom">
         <button class="big-btn green" id="next-btn" onclick="finishRecord('${phase}'); ${isPre?"showScreen('activity')":"showPostFollowup()"}" ${rec.audioBase64||rec.text?'':'style="display:none"'}>다음 ▶</button>
@@ -1141,6 +1170,24 @@ function renderRecord(root,phase){
       <div class="mascot-corner">${isPre?svgMoEum(120):svgNaNum(120)}</div>
       <div class="speech">${isPre?'네 생각을 자유롭게 말해 봐!':'오늘 새로 알게 된 게 뭐야?'}</div>
     </div>`;
+  const ta=root.querySelector('#rec-typed');
+  const wrapEl=root.querySelector('.record-wrap');
+  const openTyping=()=>{
+    const tb=root.querySelector('#type-box'),to=root.querySelector('#type-open');
+    if(tb)tb.style.display='';if(to)to.style.display='none';
+    if(wrapEl)wrapEl.classList.add('typing');     // 글쓰기 칸이 열리면 마스코트 말풍선은 접어 둔다
+  };
+  if(root.querySelector('#type-box')&&root.querySelector('#type-box').style.display!=='none'&&wrapEl)wrapEl.classList.add('typing');
+  const toBtn=root.querySelector('#type-open');
+  if(toBtn)toBtn.addEventListener('click',()=>{openTyping();setTimeout(()=>{try{ta.focus();}catch(e){}},50);});
+  if(ta){
+    ta.addEventListener('input',()=>{
+      rec.text=ta.value.trim();
+      const nb=document.getElementById('next-btn');
+      if(nb)nb.style.display=(rec.text||rec.audioBase64)?'':'none';
+    });
+    if(!APP_STATE.micPermitted)setTimeout(()=>{try{ta.focus();}catch(e){}},300);
+  }
   speak(prompt);
 }
 
@@ -1162,7 +1209,7 @@ async function toggleRecord(phase){
       if(!stream||!stream.active){stream=await navigator.mediaDevices.getUserMedia({audio:true});APP_STATE.micStream=stream;}
       mediaRecorder=new MediaRecorder(stream);
       recordChunks=[];finalTranscript='';
-      sttDisplay.style.visibility='visible';sttText.textContent='';
+      sttDisplay.style.display='';sttDisplay.style.visibility='visible';sttText.textContent='';
       mediaRecorder.ondataavailable=e=>{if(e.data.size>0)recordChunks.push(e.data);};
       mediaRecorder.onstop=()=>{
         const blob=new Blob(recordChunks,{type:'audio/webm'});
@@ -1205,7 +1252,10 @@ async function toggleRecord(phase){
 function finishRecord(phase){
   const rec=phase==='pre'?APP_STATE.preRecord:APP_STATE.postRecord;
   const sttText=document.getElementById('stt-text');
-  if(sttText)rec.text=sttText.textContent||rec.text;
+  const typed=document.getElementById('rec-typed');
+  const typedVal=typed?typed.value.trim():'';
+  if(typedVal)rec.text=typedVal;                       // 글로 쓴 것이 있으면 그것을 쓴다
+  else if(sttText)rec.text=sttText.textContent||rec.text;
   if(mediaRecorder&&mediaRecorder.state!=='inactive'){try{mediaRecorder.stop();}catch(e){}}
   if(speechRecognition){try{speechRecognition.stop();}catch(e){}speechRecognition=null;}
 }
@@ -1598,7 +1648,7 @@ function setupKeypadCheck(answer,motionFn){
       if(motionFn) await motionFn();
       setTimeout(()=>{showFeedback(true);setTimeout(nextActivity,800);},200);
     }else{
-      sfxWrong();recordWrong();
+      recordWrong();
       const slot=document.getElementById('answer-slot');
       const tensSlot=document.getElementById('ans-tens');
       const onesSlot=document.getElementById('ans-ones');
@@ -2120,7 +2170,7 @@ async function showBranchCount(target,leftVal,rightVal,isGather){
 // 모으기 그림
 function drawGatherSimple(root,q,inst){
   const ans=q.a+q.b;
-  const svgFn=OBJECT_SVG[q.kind]||OBJECT_SVG.apple;
+  const svgFn=OBJECT_SVG[q.kind]||OBJECT_SVG[q.meta]||OBJECT_SVG.apple;  // 시트에서는 그림 이름이 메모 칸에 들어 있음
   root.innerHTML=`
     <div class="activity has-keypad">
       <div class="instruction" id="instr-text">👉 모아서 몇 개?</div>
@@ -2266,7 +2316,7 @@ function bindFindPair(root,target,a,ans,isGather){
       recordCorrect();
       setTimeout(()=>{showFeedback(true);setTimeout(nextActivity,800);},200);
     }else{
-      sfxWrong();
+      recordWrong();
       selSlot.classList.add('shake');
       const sp=root.querySelector('.speech');
       if(sp)sp.textContent=`${a}${josaIrang(a)} ${val}${josaReul(val)} 모으면 ${a+val}${josaIGa(a+val)} 돼. ${target}${josaIGa(target)} 되는 짝꿍은?`;
@@ -2391,7 +2441,7 @@ function bindConnectPairs(root,target,needed,colors){
           setTimeout(nextActivity,1000);
         }
       } else {
-        sfxWrong();
+        recordWrong();
         card.classList.add('shake');
         const sp=root.querySelector('.speech');
         if(sp)sp.textContent=`${lv} + ${rv} = ${lv+rv} (${target}${josaIGa(target)} 아니야)`;
@@ -2478,7 +2528,7 @@ function bindChooseEquation(root,target,needed){
       if(sp)sp.textContent=`정답! ${needed}개 모두 찾았어!`;
       setTimeout(()=>{showFeedback(true);setTimeout(nextActivity,1000);},800);
     } else {
-      sfxWrong();
+      recordWrong();
       if(sp)sp.textContent=`합이 ${target}인 식 ${needed}개를 정확히 골라야 해. 다시 살펴봐!`;
       // 잘못 선택한 것 표시
       selected.forEach(c=>{
@@ -3141,7 +3191,7 @@ function bindBranchTree(root,target,isGather){
       const needed=target-val;
       if(needed<=0){
         if(sp)sp.textContent=`${val}만으로는 ${target} 만들기 어려워. 더 작은 수로!`;
-        sfxWrong();
+        recordWrong();
         await sleep(1200);
         slot.classList.remove('filled');slot.classList.add('empty');slot.textContent='?';
         return;
@@ -3168,7 +3218,7 @@ function bindBranchTree(root,target,isGather){
         recordCorrect();
         setTimeout(()=>{showFeedback(true);setTimeout(nextActivity,800);},200);
       }else{
-        sfxWrong();
+        recordWrong();
         if(sp)sp.textContent=`${vals[0]}${josaIrang(vals[0])} ${vals[1]}${josaReul(vals[1])} 모으면 ${sum}${josaIGa(sum)} 돼. ${target}${josaIGa(target)} 되도록 다시!`;
         if(APP_STATE.speakerOn)speak(`다시 골라 봐`,{rate:1.1});
         // 슬롯 흔들렸다가 부드럽게 비움
@@ -3201,7 +3251,7 @@ function bindBranchTree(root,target,isGather){
 function drawSplitEqual(root,q){
   const total=q.target;const answer=total/2;
   if(!Number.isInteger(answer)){nextActivity();return;}
-  const svgFn=OBJECT_SVG[q.kind]||OBJECT_SVG.bear;
+  const svgFn=OBJECT_SVG[q.kind]||OBJECT_SVG[q.meta]||OBJECT_SVG.bear;  // 시트에서는 그림 이름이 메모 칸에 들어 있음
   root.innerHTML=`
     <div class="activity has-keypad">
       <div class="instruction" id="instr-text">👉 <span class="t-num">${total}</span>${josaReul(total)} <span class="t-rel">똑같이</span> 두 묶음으로</div>
@@ -3300,10 +3350,10 @@ function renderCert(root){
           </div>
         </div>
         <div class="dashboard">
-          <div class="dash-card"><div class="num">${APP_STATE.correct}/${APP_STATE.total}</div><div class="label">📚 도전·정답</div></div>
+          <div class="dash-card"><div class="num">${APP_STATE.correct}/${APP_STATE.total}</div><div class="label">📚 정답 / 도전</div></div>
           <div class="dash-card"><div class="num">${'★'.repeat(APP_STATE.postRecord.stars)}${'☆'.repeat(5-APP_STATE.postRecord.stars)}</div><div class="label">⭐ 자기평가</div></div>
           <div class="dash-card"><div class="num">${st||'—'}</div><div class="label">🎁 스티커</div></div>
-          <div class="dash-card"><div class="num">${APP_STATE.preRecord.helpCount+APP_STATE.postRecord.helpCount}</div><div class="label">💡 도움받음</div></div>
+          <div class="dash-card"><div class="num">${APP_STATE.maxCombo||0}</div><div class="label">🔥 최고 연속 정답</div></div>
         </div>
         <div class="cert-collection">
           <h3 style="text-align:center;font-family:var(--font-display);font-size:22px;color:#444;margin:14px 0 10px">🎨 오늘의 도감</h3>
@@ -3341,26 +3391,81 @@ function getFinalMessage(){
   if(c>=t*0.5)return '🌈 잘 자라고 있어요! 더 도전해 봐요';
   return '💛 도전한 용기가 멋졌어요. 한 번 더 같이 해 봐요';
 }
-function downloadCert(){
-  const canvas=document.createElement('canvas');canvas.width=1200;canvas.height=800;
+async function downloadCert(){
+  try{ if(document.fonts&&document.fonts.ready) await document.fonts.ready; }catch(e){}
+  const W=1200,H=1600;
+  const canvas=document.createElement('canvas');canvas.width=W;canvas.height=H;
   const ctx=canvas.getContext('2d');
-  const g=ctx.createLinearGradient(0,0,0,800);g.addColorStop(0,'#FFFEF0');g.addColorStop(1,'#FFF6D6');
-  ctx.fillStyle=g;ctx.fillRect(0,0,1200,800);
-  ctx.strokeStyle='#FFC23C';ctx.lineWidth=18;ctx.strokeRect(40,40,1120,720);
-  ctx.fillStyle='#6B4A00';ctx.font='bold 64px Jua, sans-serif';ctx.textAlign='center';
-  ctx.fillText('🌟 모으기와 가르기 임명장 🌟',600,160);
-  ctx.font='bold 44px Jua, sans-serif';ctx.fillStyle='#2F7A12';
-  ctx.fillText(APP_STATE.learnerName,600,250);
-  ctx.font='bold 26px "Nanum Gothic", sans-serif';ctx.fillStyle='#333';
-  ctx.fillText('모음이와 나눔이의 모험을 멋지게 마쳤어요!',600,320);
-  ctx.font='22px "Nanum Gothic", sans-serif';ctx.fillStyle='#666';
-  ctx.fillText(`📚 ${APP_STATE.correct}/${APP_STATE.total} 정답  ·  ⭐ ${APP_STATE.postRecord.stars}/5`,600,400);
-  ctx.fillText(APP_STATE.postRecord.stickers.join(' ')||'',600,450);
-  ctx.font='18px "Nanum Gothic", sans-serif';
-  ctx.fillText(new Date().toLocaleDateString('ko-KR'),600,550);
+  const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#FFFEF0');g.addColorStop(1,'#FFF6D6');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  ctx.strokeStyle='#FFC23C';ctx.lineWidth=18;ctx.strokeRect(36,36,W-72,H-72);
+  ctx.strokeStyle='#FFE08A';ctx.lineWidth=4;ctx.strokeRect(62,62,W-124,H-124);
+  ctx.textAlign='center';ctx.textBaseline='alphabetic';
+  const F=(size,fam)=>`bold ${size}px ${fam==='d'?'Jua':'"Nanum Gothic"'}, sans-serif`;
+  // 줄 바꿔 쓰기
+  function wrap(text,x,y,maxW,lineH,maxLines){
+    const chars=[...String(text||'')];let line='',lines=[];
+    chars.forEach(ch=>{ if(ctx.measureText(line+ch).width>maxW&&line){lines.push(line);line=ch;} else line+=ch; });
+    if(line)lines.push(line);
+    if(lines.length>maxLines){lines=lines.slice(0,maxLines);lines[maxLines-1]=lines[maxLines-1].slice(0,-1)+'…';}
+    lines.forEach((l,i)=>ctx.fillText(l,x,y+i*lineH));
+    return lines.length;
+  }
+  function box(x,y,w,h,fill,stroke){
+    ctx.beginPath();if(ctx.roundRect)ctx.roundRect(x,y,w,h,22);else ctx.rect(x,y,w,h);
+    ctx.fillStyle=fill;ctx.fill();ctx.lineWidth=4;ctx.strokeStyle=stroke;ctx.stroke();
+  }
+  ctx.fillStyle='#6B4A00';ctx.font=F(68,'d');
+  ctx.fillText('🌟 모으기와 가르기 임명장 🌟',W/2,180);
+  ctx.fillStyle='#2F7A12';ctx.font=F(56,'d');
+  const who=(APP_STATE.learnerClass?APP_STATE.learnerClass+' ':'')+(APP_STATE.learnerName||'');
+  ctx.fillText(who,W/2,290);
+  ctx.fillStyle='#333';ctx.font=F(30,'b');
+  ctx.fillText('모음이와 나눔이의 모험을 끝까지 해냈어요!',W/2,360);
+  // 활동 전·후 생각
+  const pre=APP_STATE.preRecord.text||'(녹음하지 않았어요)';
+  const post=APP_STATE.postRecord.text||'(녹음하지 않았어요)';
+  box(110,420,W-220,230,'#FFF8E6','#FFC23C');
+  ctx.fillStyle='#8A6200';ctx.font=F(28,'d');ctx.fillText('💡 활동 전, 내가 아는 모으기와 가르기',W/2,475);
+  ctx.fillStyle='#333';ctx.font=F(28,'b');wrap(pre,W/2,530,W-300,42,3);
+  box(110,690,W-220,230,'#EEF8E8','#5BB836');
+  ctx.fillStyle='#2F7A12';ctx.font=F(28,'d');ctx.fillText('🌟 활동 후, 새롭게 알게 된 점',W/2,745);
+  ctx.fillStyle='#333';ctx.font=F(28,'b');wrap(post,W/2,800,W-300,42,3);
+  // 숫자 카드
+  const cards=[
+    [`${APP_STATE.correct}/${APP_STATE.total}`,'📚 정답 / 도전'],
+    ['★'.repeat(APP_STATE.postRecord.stars||0)+'☆'.repeat(5-(APP_STATE.postRecord.stars||0)),'⭐ 자기평가'],
+    [(APP_STATE.postRecord.stickers||[]).join('')||'—','🎁 스티커'],
+    [String(APP_STATE.maxCombo||0),'🔥 최고 연속 정답']
+  ];
+  const cw=230,gap=20,startX=(W-(cw*4+gap*3))/2;
+  cards.forEach((c,i)=>{
+    const x=startX+i*(cw+gap);box(x,960,cw,150,'#FFFFFF','#E5E7EB');
+    ctx.fillStyle='#222';ctx.font=F(c[0].length>8?26:40,'d');ctx.fillText(c[0],x+cw/2,1035);
+    ctx.fillStyle='#666';ctx.font=F(20,'b');ctx.fillText(c[1],x+cw/2,1085);
+  });
+  // 오늘의 도감
+  ctx.fillStyle='#444';ctx.font=F(34,'d');ctx.fillText('🎨 오늘의 도감',W/2,1180);
+  const usedCats=[...new Set(APP_STATE.questions.map(q=>STAGE_CATEGORY[q.stage]).filter(Boolean))];
+  const got=new Set(APP_STATE.collected||[]);
+  const per=Math.min(usedCats.length,6),iw=150,ig=16;
+  usedCats.forEach((cat,i)=>{
+    const row=Math.floor(i/per),col=i%per;
+    const inRow=Math.min(per,usedCats.length-row*per);
+    const x=(W-(iw*inRow+ig*(inRow-1)))/2+col*(iw+ig),y=1210+row*130;
+    const on=got.has(cat),info=CATEGORY_INFO[cat]||{icon:'❔',label:cat};
+    box(x,y,iw,115,on?'#FFE066':'#F0F0F0',on?'#E8B100':'#D0D0D0');
+    ctx.globalAlpha=on?1:.4;
+    ctx.font='44px sans-serif';ctx.fillStyle='#222';ctx.fillText(info.icon,x+iw/2,y+58);
+    ctx.font=F(20,'b');ctx.fillText(info.label,x+iw/2,y+96);
+    ctx.globalAlpha=1;
+  });
+  ctx.fillStyle='#888';ctx.font=F(24,'b');
+  ctx.fillText(new Date().toLocaleDateString('ko-KR'),W/2,H-100);
   const link=document.createElement('a');
-  link.download=`모으기와_가르기_임명장_${APP_STATE.learnerName}.png`;
-  link.href=canvas.toDataURL('image/png');link.click();
+  link.download=`모으기와_가르기_임명장_${APP_STATE.learnerName||'학생'}.png`;
+  link.href=canvas.toDataURL('image/png');
+  document.body.appendChild(link);link.click();link.remove();
 }
 </script>
 </body>
